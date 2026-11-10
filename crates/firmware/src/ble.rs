@@ -607,9 +607,17 @@ impl BleManager {
                 );
             }
             Err(err) => {
-                self.advertising = advertising.is_advertising();
-                self.next_advertise_ms = now_ms.saturating_add(1000);
-                log::warn!("cannot start advertising: {err:?}");
+                if advertising.is_advertising() {
+                    // EALREADY / another controller state: advertising is
+                    // already active, so treat it as success.
+                    self.advertising = true;
+                    self.advertising_dirty = false;
+                    self.next_advertise_ms = 0;
+                } else {
+                    self.advertising = false;
+                    self.next_advertise_ms = now_ms.saturating_add(1000);
+                    log::warn!("cannot start advertising: {err:?}");
+                }
             }
         }
     }
@@ -617,10 +625,13 @@ impl BleManager {
     fn stop_advertising(&mut self) {
         let advertising = self.device.get_advertising();
         let advertising = advertising.lock();
-        if let Err(err) = advertising.stop() {
-            log::warn!("cannot stop advertising: {err:?}");
+        match advertising.stop() {
+            Ok(()) => self.advertising = false,
+            Err(err) => {
+                log::warn!("cannot stop advertising: {err:?}");
+                self.advertising = advertising.is_advertising();
+            }
         }
-        self.advertising = false;
     }
 
     fn do_forget(&mut self, now_ms: u64) {
