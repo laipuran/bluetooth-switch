@@ -101,7 +101,7 @@ cargo run --release                 # 通过 .cargo/config.toml 里的 espflash 
 等价的手动命令：
 
 ```sh
-espflash flash --chip esp32s3 --monitor --partition-table ../../partitions.csv \
+espflash flash --chip esp32s3 --flash-size 8mb --monitor --partition-table ../../partitions.csv \
   ../../target/xtensa-esp32s3-espidf/release/bt-switch
 ```
 
