@@ -1,0 +1,11 @@
+# Firmware builds use the Espressif Xtensa Rust fork. The fork contains fixes
+# that mainline Rust/LLVM still needs for Xtensa (register allocation and
+# compiler_builtins relocation fixes).
+#
+#   cargo install espup
+#   espup install --std --targets esp32s3
+#
+# The workspace root keeps a regular nightly toolchain for host-side tests.
+[toolchain]
+channel = "esp"
+components = ["rust-src"]

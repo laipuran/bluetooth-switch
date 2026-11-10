@@ -1,0 +1,33 @@
+[package]
+name = "bt-switch-firmware"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "bt-switch"
+path = "src/main.rs"
+harness = false
+
+[features]
+default = []
+# Reuse the PlatformIO installation of ESP-IDF instead of the native builder.
+# Requires `pio` in PATH and ESP_IDF_TOOLS_INSTALL_DIR=fromenv.
+pio = ["esp-idf-svc/pio"]
+
+[dependencies]
+anyhow = "1"
+bt-switch-core = { path = "../core" }
+esp-idf-svc = { version = "0.53", features = ["critical-section", "embassy-sync"] }
+esp32-nimble = "0.13"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33.5"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+# Managed component that implements the USB HID class driver on top of the
+# ESP-IDF USB Host stack.
+remote_component = { name = "espressif/usb_host_hid", version = "1.2.1" }
+bindings_header = "bindings.h"
+bindings_module = "usb_hid"

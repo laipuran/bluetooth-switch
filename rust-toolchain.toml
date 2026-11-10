@@ -1,0 +1,7 @@
+# The Xtensa ESP-IDF target is tier 3 in upstream Rust, so std is built from
+# source (see crates/firmware/.cargo/config.toml).
+#
+# `espup install` users can replace the channel below with `esp`.
+[toolchain]
+channel = "nightly-2026-07-21"
+components = ["rust-src", "llvm-tools"]

@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/core", "crates/firmware"]
+default-members = ["crates/core"]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = 1
+
+[profile.dev]
+opt-level = "z"
+debug = true

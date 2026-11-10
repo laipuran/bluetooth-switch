@@ -1,0 +1,19 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+runner = "espflash flash --chip esp32s3 --monitor --partition-table ../../partitions.csv"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+# Pin the same major/minor as the reference PlatformIO project. Both NimBLE
+# and the managed usb_host_hid component are supported on IDF 6.1.
+ESP_IDF_VERSION = "tag:v6.1"
+# This is a virtual workspace, so esp-idf-sys needs to be told which member
+# owns the `[package.metadata.esp-idf-sys]` section.
+ESP_IDF_SYS_ROOT_CRATE = "bt-switch-firmware"
