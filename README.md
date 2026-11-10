@@ -63,19 +63,13 @@ crates/firmware/    ESP-IDF 固件
 
 ```sh
 cargo install espup
-espup install --std --targets esp32s3
+espup install --std --targets esp32s3 \
+  --toolchain-version 1.97.0.0 --skip-version-parse
 cargo install ldproxy espflash
 source ~/export-esp.sh          # 推荐；提供 esp-clang / LIBCLANG_PATH
 ```
 
-如果 espup 查询 GitHub API 被限流，可以固定版本：
-
-```sh
-espup install --std --targets esp32s3 \
-  --toolchain-version 1.97.0.0 --skip-version-parse
-```
-
-`crates/firmware/rust-toolchain.toml` 固定使用 `esp` 工具链；根目录的 `rust-toolchain.toml` 使用普通 nightly，仅用于 `bt-switch-core` 的电脑端测试。
+`1.97.0.0` 是本文验证过的版本。`--skip-version-parse` 可以避开 espup 查询 GitHub API 时的限流。`crates/firmware/rust-toolchain.toml` 固定使用 `esp` 工具链；根目录的 `rust-toolchain.toml` 使用普通 nightly，仅用于 `bt-switch-core` 的电脑端测试。
 
 ### 默认：让 esp-idf-sys 自动准备 ESP-IDF
 

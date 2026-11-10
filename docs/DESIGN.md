@@ -124,14 +124,16 @@ NVS namespace `bt_switch`，key `slots`，固定 53 字节：
 | --- | --- | --- |
 | `main` | esp-idf-svc | 状态机 tick、按键、USB 事件消费、report 转发 |
 | `usb_lib` | `std::thread` | `usb_host_lib_handle_events`、设备释放 |
-| HID 后台任务 | `hid_host_install(create_background_task=true)` | 枚举回调、input report 回调、解析 |
+| `usb_connect` | `std::thread` | HID interface open/start/close、描述符解析、上下文注册 |
+| HID 后台任务 | `hid_host_install(create_background_task=true)` | 枚举/input report 回调，只做解码和非阻塞投递 |
 | NimBLE host task | ESP-IDF | GAP/GATT/安全回调 |
 | `console` | `std::thread` | 阻塞读取 UART 命令 |
 
 共享状态：
 
 * `TX`：USB 回调 -> 主循环的有界 channel。
-* `INTERFACES`：`Mutex<Vec<InterfaceCtx>>`，HID 回调写、主循环不直接读。
+* `LIFECYCLE_TX`：HID driver -> `usb_connect` 线程的连接/断开事件。
+* `INTERFACES`：`Mutex<Vec<InterfaceCtx>>`，`usb_connect` 线程注册/移除，HID 回调解码。
 * `OVERFLOW`：channel 满时置位；主循环清空 Translator 并发送全零 report。
 * BLE 回调只通过 channel 发送事件，不直接碰主循环状态。
 

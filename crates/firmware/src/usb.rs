@@ -4,6 +4,12 @@
 //! The `espressif/usb_host_hid` managed component enumerates the device and
 //! delivers raw input reports; this module owns the C driver lifecycle and
 //! turns reports into [`UsbEvent`] values for the main loop.
+//!
+//! Lifecycle calls (`hid_host_device_open/start/close`) are deliberately made
+//! from a worker thread, not from the HID driver callback. The reference C
+//! implementation does the same: blocking inside the driver's own event task
+//! can deadlock during connect/disconnect, especially if the receiver is
+//! unplugged while its report descriptor is being fetched.
 
 #[cfg(not(esp_idf_comp_espressif__usb_host_hid_enabled))]
 compile_error!(
@@ -15,7 +21,7 @@ use std::ffi::c_void;
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError, sync_channel};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -33,15 +39,22 @@ pub enum UsbEvent {
     Detached { source: u8 },
 }
 
+enum LifecycleEvent {
+    Connected { handle: usize },
+    Disconnected { handle: usize },
+}
+
 struct InterfaceCtx {
     handle: usize,
     source: u8,
     parser: Parser,
     states: [Decoded; MAX_REPORTS],
     invalid_reports: u32,
+    disconnected: bool,
 }
 
 static TX: OnceLock<SyncSender<UsbEvent>> = OnceLock::new();
+static LIFECYCLE_TX: OnceLock<Sender<LifecycleEvent>> = OnceLock::new();
 static INTERFACES: OnceLock<Mutex<Vec<InterfaceCtx>>> = OnceLock::new();
 static OVERFLOW: AtomicBool = AtomicBool::new(false);
 static ATTACHED: AtomicUsize = AtomicUsize::new(0);
@@ -80,9 +93,19 @@ pub fn start() -> Result<UsbInput> {
         .set(Mutex::new(Vec::new()))
         .map_err(|_| anyhow!("USB input already started"))?;
 
+    // Connection setup/teardown runs here, outside the HID driver callback.
+    let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
+    LIFECYCLE_TX
+        .set(lifecycle_tx)
+        .map_err(|_| anyhow!("USB input already started"))?;
+    thread::Builder::new()
+        .name("usb_connect".into())
+        .stack_size(8192)
+        .spawn(move || connect_worker(lifecycle_rx))?;
+
     // The ESP-IDF USB Host library needs a task that handles library-level
     // events (enumeration, client registration and device freeing).
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
     thread::Builder::new()
         .name("usb_lib".into())
         .stack_size(8192)
@@ -111,7 +134,7 @@ pub fn start() -> Result<UsbInput> {
     Ok(UsbInput { events: rx })
 }
 
-fn usb_library_task(ready: std::sync::mpsc::Sender<i32>) {
+fn usb_library_task(ready: Sender<i32>) {
     let mut config: usb::usb_host_config_t = unsafe { mem::zeroed() };
     config.skip_phy_setup = false;
     config.root_port_unpowered = false;
@@ -136,12 +159,21 @@ fn usb_library_task(ready: std::sync::mpsc::Sender<i32>) {
     }
 }
 
-unsafe extern "C" fn driver_callback(
-    handle: usb::hid_host_device_handle_t,
-    event: usb::hid_host_driver_event_t,
-    _arg: *mut c_void,
-) {
-    if event != usb::hid_host_driver_event_t_HID_HOST_DRIVER_EVENT_CONNECTED || handle.is_null() {
+fn connect_worker(events: Receiver<LifecycleEvent>) {
+    while let Ok(event) = events.recv() {
+        match event {
+            LifecycleEvent::Connected { handle } => {
+                handle_connect(handle as usb::hid_host_device_handle_t);
+            }
+            LifecycleEvent::Disconnected { handle } => {
+                handle_disconnect(handle as usb::hid_host_device_handle_t);
+            }
+        }
+    }
+}
+
+fn handle_connect(handle: usb::hid_host_device_handle_t) {
+    if handle.is_null() {
         return;
     }
 
@@ -198,6 +230,7 @@ unsafe extern "C" fn driver_callback(
             parser,
             states: [Decoded::default(); MAX_REPORTS],
             invalid_reports: 0,
+            disconnected: false,
         });
     }
 
@@ -241,6 +274,39 @@ unsafe extern "C" fn driver_callback(
     ATTACHED.fetch_add(1, Ordering::Relaxed);
 }
 
+fn handle_disconnect(handle: usb::hid_host_device_handle_t) {
+    let removed = remove_interface(handle as usize);
+    if let Some(interface) = removed {
+        if ATTACHED.load(Ordering::Relaxed) > 0 {
+            ATTACHED.fetch_sub(1, Ordering::Relaxed);
+        }
+        log::info!("USB HID interface {} disconnected", interface.source);
+    }
+    let err = unsafe { usb::hid_host_device_close(handle) };
+    if err != sys::ESP_OK {
+        log::debug!("hid_host_device_close: {err}");
+    }
+}
+
+unsafe extern "C" fn driver_callback(
+    handle: usb::hid_host_device_handle_t,
+    event: usb::hid_host_driver_event_t,
+    _arg: *mut c_void,
+) {
+    if event != usb::hid_host_driver_event_t_HID_HOST_DRIVER_EVENT_CONNECTED || handle.is_null() {
+        return;
+    }
+    if let Some(tx) = LIFECYCLE_TX.get()
+        && tx
+            .send(LifecycleEvent::Connected {
+                handle: handle as usize,
+            })
+            .is_err()
+    {
+        log::error!("USB connect worker is gone");
+    }
+}
+
 unsafe extern "C" fn interface_callback(
     handle: usb::hid_host_device_handle_t,
     event: usb::hid_host_interface_event_t,
@@ -276,6 +342,9 @@ unsafe extern "C" fn interface_callback(
                 else {
                     return;
                 };
+                if interface.disconnected {
+                    return;
+                }
                 let InterfaceCtx {
                     parser,
                     states,
@@ -328,6 +397,9 @@ unsafe extern "C" fn interface_callback(
                 else {
                     return;
                 };
+                if interface.disconnected {
+                    return;
+                }
                 interface.states = [Decoded::default(); MAX_REPORTS];
                 UsbEvent::Input {
                     source: interface.source,
@@ -337,25 +409,24 @@ unsafe extern "C" fn interface_callback(
             send(payload);
         }
         usb::hid_host_interface_event_t_HID_HOST_INTERFACE_EVENT_DISCONNECTED => {
-            let removed = {
+            // Release input immediately; the worker closes the interface.
+            let source = {
                 let mut interfaces = lock_interfaces();
                 interfaces
-                    .iter()
-                    .position(|interface| interface.handle == handle as usize)
-                    .map(|index| interfaces.swap_remove(index))
+                    .iter_mut()
+                    .find(|interface| interface.handle == handle as usize)
+                    .map(|interface| {
+                        interface.disconnected = true;
+                        interface.source
+                    })
             };
-            if let Some(interface) = removed {
-                if ATTACHED.load(Ordering::Relaxed) > 0 {
-                    ATTACHED.fetch_sub(1, Ordering::Relaxed);
-                }
-                log::info!("USB HID interface {} disconnected", interface.source);
-                send(UsbEvent::Detached {
-                    source: interface.source,
-                });
+            if let Some(source) = source {
+                send(UsbEvent::Detached { source });
             }
-            let err = unsafe { usb::hid_host_device_close(handle) };
-            if err != sys::ESP_OK {
-                log::warn!("hid_host_device_close: {err}");
+            if let Some(tx) = LIFECYCLE_TX.get() {
+                let _ = tx.send(LifecycleEvent::Disconnected {
+                    handle: handle as usize,
+                });
             }
         }
         other => {
@@ -373,9 +444,12 @@ fn allocate_source() -> Option<u8> {
     })
 }
 
-fn remove_interface(handle: usize) {
+fn remove_interface(handle: usize) -> Option<InterfaceCtx> {
     let mut interfaces = lock_interfaces();
-    interfaces.retain(|interface| interface.handle != handle);
+    interfaces
+        .iter()
+        .position(|interface| interface.handle == handle)
+        .map(|index| interfaces.swap_remove(index))
 }
 
 fn send(event: UsbEvent) {
