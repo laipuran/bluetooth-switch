@@ -1,4 +1,4 @@
-//! Board-specific wiring for the Espressif ESP32-S3-USB-OTG devkit.
+//! 仅适用于乐鑫官方 ESP32-S3-USB-OTG 开发板的引脚与供电配置。
 //!
 //! The USB Type-A "HOST" socket is shared with the ESP32-S3 native USB pins
 //! through a mux:

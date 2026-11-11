@@ -67,7 +67,7 @@ impl SlotTable {
         index < self.count && self.slots[index].used
     }
 
-    /// Request a slot. The switch is committed on the next disconnect.
+    /// 请求目标槽位；调用方可立即提交，提交过程不要求断开连接。
     pub fn select(&mut self, index: usize) -> bool {
         if index >= self.count || index == self.desired {
             return false;

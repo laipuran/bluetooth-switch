@@ -7,6 +7,8 @@
 pub mod control;
 pub mod hid;
 pub mod report;
+pub mod router;
+pub mod session;
 pub mod slots;
 
 /// HID interfaces that can be merged into one Bluetooth HID device.
@@ -21,4 +23,5 @@ pub const MAX_SLOTS: usize = 6;
 
 pub use hid::{Decoded, Parser};
 pub use report::{Reports, Sent, Translator};
+pub use router::{Peer, Router};
 pub use slots::{PairingWindow, Slot, SlotTable};

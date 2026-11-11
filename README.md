@@ -2,7 +2,7 @@
 
 把插在 ESP32-S3 USB Host 口上的 2.4 GHz 键鼠接收器，变成一个可以在多台电脑之间切换的蓝牙 HID 键鼠。
 
-这是 `../bluetooth-switch` 中 PlatformIO/C 原型的功能等价 Rust 实现，目标板为 **Espressif ESP32-S3-USB-OTG**（ESP32-S3-MINI-1-N8，8 MB Flash，无 PSRAM）。
+这是 `../bluetooth-switch` 中 PlatformIO/C 原型的 Rust 移植项目。当前测试板为第三方 ESP32-S3 开发板，串口识别到 16 MB Flash；固件已接入多连接路由，实际验证范围见下文。
 
 ```text
  2.4 GHz 接收器 ──USB-A──> ESP32-S3 (USB Host)
@@ -16,9 +16,19 @@
           主机 1            主机 2            主机 3
 ```
 
-同一时间只连接一台主机。通过板上按键或串口命令选择槽位，切换时先断开当前主机，再用白名单只向目标主机广播。
+默认配置最多 3 条连接，仅选中的槽位接收输入。切槽不再主动断连；旧、新目标发送全释放，失败会重试。离线目标暂停输入，不回退到其他主机；白名单覆盖全部已配对槽位。
+
+**上板状态（2026-11-11）**：新固件已验证一台主机加密在线时继续广播、真实 CCCD 门控、三种定向全零通知、切到离线目标仍保留原连接，以及回到原目标后恢复通知。
+第二台主机当前不在蓝牙覆盖范围内，**双机同时在线、跨主机隔离与切换延迟尚未实测**。Host 5 V 供电也未确认，USB→BLE 完整输入链路未验证。详见 [上板测试记录](docs/BOARD_TEST.md)。
 
 ## 硬件
+
+默认使用通用板配置：**不驱动任何未确认的 LED、按键、USB 路由或供电 GPIO**，管理操作使用串口。
+原生 USB 使用 GPIO19=D−、GPIO20=D+；使用 USB Host 前须确认对应接口接线及 5 V VBUS，不能根据双 Type-C 外观判断。
+本轮实读 Flash 为 16 MB，配置和烧录参数已据此设置；更换硬件须重新确认容量。
+
+以下引脚表**仅适用于乐鑫官方 ESP32-S3-USB-OTG 板**，需显式使用 `--features official-otg`。
+官方板还需将 `sdkconfig.defaults` 和烧录命令中的 Flash 容量改为实际 8 MB，不能直接使用当前测试板参数。
 
 | 功能 | 引脚 | 说明 |
 | --- | --- | --- |
@@ -34,9 +44,9 @@
 | DW | GPIO11 | 单击：打开配对窗口 |
 | MENU | GPIO14 | 单击：状态；长按 5 s：忘记当前槽位 |
 
-> **供电注意**：默认配置下，USB-A HOST 口的 5 V 来自板上的 `USB_DEV` Type-A 公头（或电池升压）。只插 Micro-USB 调试口时，接收器可能没有供电。使用电池时把 `crates/firmware/src/board.rs` 里的 `HOST_POWER` 改成 `BatteryBoost`。
+> **官方板供电注意**：启用 `official-otg` 后，USB-A HOST 口的 5 V 来自板上的 `USB_DEV` Type-A 公头（或电池升压）。只插 Micro-USB 调试口时，接收器可能没有供电。使用电池时把 `crates/firmware/src/board/official_otg.rs` 里的 `HOST_POWER` 改成 `BatteryBoost`。
 >
-> **烧录注意**：固件把 `USB_SEL` 拉高后，S3 的原生 USB 已经接到 USB-A Host 口，因此**必须通过板上的 Micro-USB UART 口烧录和看日志**，不要指望 USB_DEV 口出现在电脑上。
+> **烧录注意**：请使用板上的 USB-UART 接口。官方板启用 `USB_SEL` 后，S3 原生 USB 已接到 Host 口，不能再用它烧录或监控。
 
 ## 目录结构
 
@@ -44,12 +54,14 @@
 crates/core/        与 ESP-IDF 无关的纯逻辑，可在电脑上 cargo test
   hid.rs            HID report descriptor 解析、report 解码、BLE report map
   report.rs         多接口状态合并、键盘/鼠标/多媒体 report、切换时的“armed”保护
+  router/           已接入固件的多连接路由、定向投递与释放重试
+  session.rs        逐连接协议、订阅、挂起、LED 与读取快照
   slots.rs          槽位表、NVS 二进制格式、配对窗口
   control.rs        按键消抖、单击/长按识别
 crates/firmware/    ESP-IDF 固件
   usb.rs            USB Host + HID class driver（FFI）
-  ble.rs            NimBLE BLE HID、白名单、认证、槽位状态机
-  board.rs          ESP32-S3-USB-OTG 的引脚/供电初始化
+  ble/              BLE 应用层与 NimBLE 适配层，职责划分见 docs/DESIGN.md
+  board/            默认通用安全配置；官方 OTG 引脚配置需显式启用
   storage.rs        NVS 槽位持久化
   console.rs        串口命令
   main.rs           主循环
@@ -101,7 +113,7 @@ cargo run --release                 # 通过 .cargo/config.toml 里的 espflash 
 等价的手动命令：
 
 ```sh
-espflash flash --chip esp32s3 --flash-size 8mb --monitor --partition-table ../../partitions.csv \
+espflash flash --chip esp32s3 --flash-size 16mb --monitor --partition-table ../../partitions.csv \
   ../../target/xtensa-esp32s3-espidf/release/bt-switch
 ```
 
@@ -112,44 +124,47 @@ cargo test -p bt-switch-core
 cargo clippy -p bt-switch-core --all-targets -- -D warnings
 ```
 
-`bt-switch-core` 包含 22 个测试：HID 描述符边界/模糊输入、report 解码、多接口合并、切换保护、槽位持久化、按键手势。
+`bt-switch-core` 包含 33 个测试：HID 描述符边界/模糊输入、report 解码、多接口合并、切换保护、多连接路由、逐连接属性、槽位持久化、按键手势。
 
 ## 使用
 
-固件启动后，绿色 LED 慢闪表示正在广播。首次配对：
+通用板通过串口 `s` 查看状态，不操作板载 LED 或按键。下述 LED/按键提示仅适用于官方板配置。首次配对：
 
-1. 用 `n` / OK 键选中一个空槽位。选中空槽位会自动打开 120 s 配对窗口。
+1. 用 `p` 为空槽位打开 120 s 配对窗口，不改变输入目标或断开已有主机；选择空槽位也会打开窗口。
 2. 在目标电脑的蓝牙设置里搜索 `BT Switch` 并连接。系统会走 Just Works 配对（无 PIN）。
-3. 配对成功后绿色 LED 常亮，键鼠输入开始转发。
+3. 用 `1`..`3` 选择输入目标。目标必须已加密、有真实 HID 通知订阅，且全释放已成功排队，才能接收输入。
 
 之后：
 
 * `n` / OK：下一个槽位。
 * `b` / UP：上一个槽位。
 * `1`..`3`：直接选择槽位。
-* `p` / DW：重新打开当前空槽位的配对窗口。
-* `X` / MENU 长按 5 s：忘记当前槽位（同时会删除 BLE bond；主机侧也要移除设备）。
+* `t`：向当前主机发送全零 HID 探针，不产生按键、鼠标移动或滚轮。
+* `p` / DW：为当前空槽位或下一个空槽位打开配对窗口，不改变输入目标。
+* `X` / MENU 长按 5 s：仅断开并忘记当前槽位，其他连接保留；主机侧也要移除设备。
 * `s` / MENU 单击：打印槽位、连接、USB 状态。
 * `h`：帮助。
 
 切换时如果按着 Ctrl/Alt/鼠标键，固件会等到所有键都松开才向新主机转发输入，避免“粘键”。
 
-串口参数：115200 8N1（Micro-USB UART）。
+串口参数：115200 8N1，使用实际开发板的 USB-UART 接口。
 
 ## 实现要点
 
 * **USB Host**：通过 `espressif/usb_host_hid` 托管组件枚举接收器。每个 HID interface 独立解析 report descriptor；支持编号 report、boot 协议设备强制切到 report 协议。
 * **多接口合并**：一个接收器常常同时暴露键盘、鼠标、Consumer 三个 interface，固件按接口合并按键/按钮/多媒体键；相对位移只属于当前数据包，不会被重新播放。
 * **BLE HID**：NimBLE + 自定义 HID over GATT 服务，report map 与 C 版一致（keyboard / mouse / consumer 三个 report ID）。
-* **槽位**：最多 6 个（固件默认 3 个），地址写入 NVS。已配对槽位广播时使用单地址白名单；如果白名单设置失败，会退回“连接后认证校验”。
-* **安全**：LE Secure Connections + Bonding，Just Works，无 MITM；HID 输入 characteristic 要求加密。
-* **切换保护**：`Translator` 在切换/断线后 disarm，只有当前输入全部释放且 BLE 已就绪时才重新 arm。
+* **槽位与连接**：核心最多 6 个槽位，固件和 NimBLE 默认配置 3 条连接；增加槽位数需同步增加控制器活动与 CCCD 容量。所有已配对主机按身份回到原槽位，与当前输入目标无关。
+* **逐连接属性**：Report/Boot 协议、通知订阅、挂起、LED 与输入报告读取值彼此独立。通知只调用 `notify_with(data, connection)`，不广播给其他订阅者。
+* **安全**：LE Secure Connections + Bonding，Just Works，无 MITM；动态 HID 读写及输入 CCCD 写入要求加密。新连接的应用侧安全请求串行发起。
+* **切换保护**：`Translator` 在目标或相关连接状态变化后 disarm，需先物理释放；路由器还负责旧、新目标释放，旧主机的发送失败不阻塞新主机。
 
 更详细的状态机和线程模型见 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
 ## 已知限制
 
-* 同一时间只连接一台主机；不支持同时多主机广播。
+* 多连接实现已接入，但目前仅完成单主机上板回归；双机/第三台、RPA 及其他系统均待实测，不能沿用 C 固件的验证结论。
+* Boot 模式仅键盘与 3 字节鼠标，没有 Consumer/滚轮；Boot 与逐连接写属性目前只有核心测试，BlueZ 默认只读导出 HID 属性使本机 D-Bus 写属性测试受阻，未为此修改系统蓝牙配置。
 * 只处理标准 USB HID 键鼠/Consumer；不转发厂商自定义 report、RGB、震动等。
 * HID 输出 report（键盘 LED）已经建立 characteristic，但尚未回传给 USB 接收器。
 * 绝对坐标设备（数位板、触摸屏）会被忽略，避免被误当成鼠标相对位移。

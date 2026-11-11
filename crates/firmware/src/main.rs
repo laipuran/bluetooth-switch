@@ -1,6 +1,6 @@
 //! BT Switch: USB HID receiver -> multi-host Bluetooth HID switcher.
 //!
-//! Target: Espressif ESP32-S3-USB-OTG (8 MiB flash, no PSRAM).
+//! 默认使用第三方 ESP32-S3 安全板级配置，不驱动未确认的 GPIO。
 //! See README.md for wiring, controls and build instructions.
 
 mod ble;
@@ -108,6 +108,9 @@ fn main() -> Result<()> {
             while usb.events.try_recv().is_ok() {}
         }
 
+        if ble.take_input_reset() {
+            translator.disarm();
+        }
         translator.set_ready(ble.is_ready());
         let reports = translator.flush();
         let sent = ble.send_reports(&reports);
@@ -152,6 +155,8 @@ fn apply_command(
             ble.status(now);
             usb.status();
         }
+        // 安全传输探针只发送释放状态，不合成按键、鼠标移动或滚轮。
+        Command::Probe => ble.release_reports(),
         Command::Help => print_help(ble.slot_count()),
     }
 }
@@ -162,10 +167,21 @@ fn print_help(slot_count: usize) {
     println!(
         "  serial: n=next, b=previous, 1..{slot_count}=select slot, p=pair, X=forget, s=status, h=help"
     );
-    println!("  OK button: click=next slot, hold 3 s=pairing window");
-    println!("  UP button: click=previous slot");
-    println!("  DW button: click=pairing window");
-    println!("  MENU button: click=status, hold 5 s=forget selected slot");
-    println!("  Green LED: ready solid / advertising blinking; yellow LED: USB receiver attached");
+    println!("  t=send neutral HID probe to the selected host (no keys or movement)");
+    #[cfg(feature = "official-otg")]
+    {
+        println!("  OK button: click=next slot, hold 3 s=pairing window");
+        println!("  UP button: click=previous slot");
+        println!("  DW button: click=pairing window");
+        println!("  MENU button: click=status, hold 5 s=forget selected slot");
+        println!(
+            "  Green LED: ready solid / advertising blinking; yellow LED: USB receiver attached"
+        );
+    }
+
+    #[cfg(not(feature = "official-otg"))]
+    println!(
+        "  Generic board: buttons/LEDs disabled; USB Host requires external VBUS verification"
+    );
     println!();
 }

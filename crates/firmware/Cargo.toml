@@ -11,6 +11,8 @@ harness = false
 
 [features]
 default = []
+# 仅确认使用乐鑫官方 USB-OTG 板时启用其供电、路由与按键引脚。
+official-otg = []
 # Reuse the PlatformIO installation of ESP-IDF instead of the native builder.
 # Requires `pio` in PATH and ESP_IDF_TOOLS_INSTALL_DIR=fromenv.
 pio = ["esp-idf-svc/pio"]

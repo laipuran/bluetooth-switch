@@ -14,6 +14,7 @@ pub enum Command {
     Pair,
     Forget,
     Status,
+    Probe,
     Help,
 }
 
@@ -49,6 +50,7 @@ fn parse(byte: u8) -> Option<Command> {
         b'p' => Some(Command::Pair),
         b'X' => Some(Command::Forget),
         b's' => Some(Command::Status),
+        b't' => Some(Command::Probe),
         b'h' | b'?' => Some(Command::Help),
         b'1'..=b'6' => Some(Command::Select(usize::from(byte - b'1'))),
         _ => None,
