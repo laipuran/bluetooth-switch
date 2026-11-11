@@ -1,0 +1,28 @@
+menu "Bluetooth switch"
+    config SWITCH_SLOT_COUNT
+        int "Number of simultaneously connected host slots"
+        range 2 6
+        default 3
+        help
+            Each paired slot can stay connected independently. Selecting a slot
+            only changes the HID input target, not the other BLE connections.
+    config SWITCH_BUTTON_GPIO
+        int "Active-low button GPIO (-1 disables button)"
+        range -1 48
+        default -1
+        help
+            Connect a normally-open button between this GPIO and GND.
+            GPIO0 can be used for BOOT only after confirming board wiring.
+    config SWITCH_VBUS_GPIO
+        int "USB host 5V power enable GPIO (-1 leaves hardware untouched)"
+        range -1 48
+        default -1
+    config SWITCH_VBUS_ACTIVE_LEVEL
+        int "USB power enable active level"
+        range 0 1
+        default 1
+    config SWITCH_PAIRING_SECONDS
+        int "Pairing window in seconds for an empty slot"
+        range 30 600
+        default 120
+endmenu
