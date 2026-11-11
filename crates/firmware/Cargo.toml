@@ -33,3 +33,6 @@ embuild = "0.33.5"
 remote_component = { name = "espressif/usb_host_hid", version = "1.2.1" }
 bindings_header = "bindings.h"
 bindings_module = "usb_hid"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/ble_capacity"]

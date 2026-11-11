@@ -3,6 +3,7 @@
 mod admission;
 mod advertising;
 mod attributes;
+mod bond;
 mod connection;
 mod events;
 mod management;
@@ -115,7 +116,10 @@ impl BleManager {
         let pending_unknown = self.connections.iter().any(|link| !link.secured);
         let pairing = self.pairing_open(now_ms) && !pending_unknown;
         let known = self.slots.slots().iter().any(|slot| slot.used);
-        let allowed = self.connections.len() < SLOT_COUNT && (known || pairing);
+        // 忘记流程暂时不接受新连接，避免旧主机自动回连抢占删除窗口。
+        let allowed = self.forget_pending.is_none()
+            && self.connections.len() < SLOT_COUNT
+            && (known || pairing);
         self.advertising
             .poll(self.device, allowed, &self.slots, pairing, now_ms);
     }

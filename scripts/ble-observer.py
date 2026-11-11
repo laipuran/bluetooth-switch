@@ -70,6 +70,8 @@ class Observer:
 
     def command(self, request):
         action = request["action"]
+        if action == "clock":
+            return {"monotonic": time.monotonic()}
         if action == "reset":
             self.notifications.clear()
             return {"reset": True}

@@ -1,7 +1,7 @@
 //! 主机按身份认领原槽位；新配对使用建连时捕获的窗口，不借用输入目标。
 
 use super::connection::Connection;
-use super::events::{BleEvent, format_address, to_ble_address};
+use super::events::{BleEvent, format_address};
 use super::{BleManager, SLOT_COUNT};
 
 impl BleManager {
@@ -164,12 +164,10 @@ impl BleManager {
             .update(conn, |state| state.authorized = false);
     }
 
-    fn cleanup_rejected_bond(&self, address: [u8; 6], address_type: u8) {
+    fn cleanup_rejected_bond(&mut self, address: [u8; 6], address_type: u8) {
         // 只清理未认领槽位的新配对，不能误删其他合法主机的密钥。
         if self.slots.find(address).is_none()
-            && let Err(error) = self
-                .device
-                .delete_bond(&to_ble_address(address, address_type))
+            && let Err(error) = self.remove_peer_bond(address, address_type)
         {
             log::warn!("cannot remove rejected bond: {error:?}");
         }

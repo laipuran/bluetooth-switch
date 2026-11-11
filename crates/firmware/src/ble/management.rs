@@ -1,6 +1,6 @@
 //! 输入目标、配对窗口和忘记槽位是三种独立操作；只有忘记会断开对应连接。
 
-use super::events::{format_address, to_ble_address};
+use super::events::format_address;
 use super::{BleManager, PAIRING_SECONDS};
 
 impl BleManager {
@@ -101,10 +101,8 @@ impl BleManager {
             return;
         }
 
-        if let Some(saved) = self.slots.slot(slot).filter(|saved| saved.used)
-            && let Err(error) = self
-                .device
-                .delete_bond(&to_ble_address(saved.address, saved.address_type))
+        if let Some(saved) = self.slots.slot(slot).filter(|saved| saved.used).copied()
+            && let Err(error) = self.remove_peer_bond(saved.address, saved.address_type)
         {
             self.forget_retry_ms = now_ms.saturating_add(1000);
             log::warn!("cannot delete bond for slot {}: {error:?}", slot + 1);

@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use bt_switch_core::slots::SlotTable;
 use esp32_nimble::enums::AdvFilterPolicy;
 use esp32_nimble::utilities::BleUuid;
-use esp32_nimble::{BLEAdvertisementData, BLEDevice};
+use esp32_nimble::{BLEAdvertisementData, BLEDevice, BLEError};
 
 use super::events::to_ble_address;
 
@@ -50,6 +50,19 @@ impl Advertising {
     pub(super) fn invalidate(&mut self) {
         self.dirty = true;
         self.retry_at_ms = 0;
+    }
+
+    pub(super) fn pause(&mut self, device: &mut BLEDevice) -> Result<(), BLEError> {
+        self.active = device.get_advertising().lock().is_advertising();
+        self.invalidate();
+        if self.active {
+            self.stop(device);
+        }
+        if self.active {
+            BLEError::convert(esp_idf_svc::sys::BLE_HS_EBUSY)
+        } else {
+            Ok(())
+        }
     }
 
     /// 建连会终止广播；断连回调也要求重新检查控制器状态。

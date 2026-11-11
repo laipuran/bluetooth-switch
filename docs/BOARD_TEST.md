@@ -1,8 +1,82 @@
 # Rust 固件上板测试记录
 
-日期：2026-11-11。测试对象为当前 Rust 工作树，包含 BLE 职责拆分、通用板配置和串口全零探针。
+本文件保留不同阶段的测试证据，最新结果为 2026-11-12 的双机实测；后文单机及单连接记录属于历史，不代表当前实现状态。
 
-## 最新：多连接实现接入后的回归
+## 最新：2026-11-12 双机实测与修复
+
+### 清理与环境
+
+- 按用户明确授权，对同一块 16 MB ESP32-S3 执行 **整片 `erase-flash`**，不做新备份；随后仅刷入本项目 Rust bootloader、分区表及应用，旧固件和 NVS 已清除。
+- 仅清理两台 Linux 的 `BT Switch`（`68:EE:8F:59:7F:36`）配对记录，未删除其他蓝牙设备。
+- 两台主机重新配对到槽位 1/2；机器 2 使用 Tailscale IP `100.115.182.59`，SSH 校验此前保存的 `192.168.31.209` 主机公钥，无关闭公钥校验操作。
+- 两端都创建了 `BT Switch Keyboard` 和 `BT Switch Mouse` 输入节点。没有生成实际按键或鼠标位移；USB 状态仍是 0 接口、0 报告，所以这不代表 USB→BLE 完整输入测试通过。
+
+### 发现并修复的问题
+
+1. **忘记单槽位一直等待。** 原流程在广告活跃时调用 `BLEDevice::delete_bond`，ESP-IDF v6.1 的 `ble_gap_unpair` 明确返回 `EBUSY`。实际回归 8 秒内未完成；修复后先暂停广播、只删除指定主机，再恢复广告。实测约 0.8 秒内检测到完成，另一台始终保持加密连接。
+2. **双机同时恢复加密偶发等待约 30 秒。** 两端 HCI 元数据显示已发送加密命令，一条连接迟迟没有加密完成事件。根因是 NimBLE 的 SMP 过程池仍默认为 1，而连接容量已为 3。应用层串行请求不能阻止两台中心设备同时发起加密。
+
+最终修复通过本地 IDF 构建配置为 `bt` 目标定义 `MYNEWT_VAL_BLE_SM_MAX_PROCS=CONFIG_BT_NIMBLE_MAX_CONNECTIONS`。
+实际 `ble_sm.c` 编译命令已确认含 `-DMYNEWT_VAL_BLE_SM_MAX_PROCS=3`。
+过程中试过调整主动请求与本地依赖补丁，但单独使用它们仍能复现；**最终均撤掉**，继续使用原版 crates.io `esp32-nimble 0.13.0` 和原有请求调度，仅保留容量修正。
+
+### 最终固件实际结果
+
+| 检查 | 结果 |
+| --- | --- |
+| 双机连接、服务与加密 | 两端 `Paired/Connected/ServicesResolved=true`，固件 `online=2`、两个槽位均加密 |
+| 真实 CCCD | 两条连接均观察到 `subs=0x07` |
+| 40 次 1↔2 切换 | 两端始终在线；每次旧、新目标都收到三份全零释放 |
+| 41 次显式定向探针 | 选中端收到键盘/鼠标/Consumer，未选中端 0 条，未发现广播串流 |
+| 选择空槽位 3 | 保留两条加密连接，`ready=false`，两端均 0 条探针；回到 1 后恢复 |
+| 忘记槽位 2 | 完成删除且槽位 1 加密在线；随后机器 2 可重新配对回 2 |
+| 连续 10 次硬件复位 | 无重新配对，10/10 在 10 秒调试门槛内恢复两条加密授权连接；脚本检测值约 1.0–1.5 秒 |
+| 底层容量 | 实际编译为 connections=3、SMP=3、activities=4、CCCDs=48 |
+| 未验证 | 第三台同时在线、RPA、其他系统、USB 实际输入、真实拥塞下的硬件释放重试 |
+
+复位恢复计时从脚本发起连接请求算起，包含 0.5 秒状态采样粒度，不是精确 SMP 时间或断电恢复测量。
+订阅观测端退出时会取消其订阅，结束后以实际 CCCD 为准；最终复位/回连用于恢复正常主机连接状态。
+
+最终 40 次切换的主机侧释放观测（毫秒）：
+
+| 观测 | 主机 1 最小/中位/最大 | 主机 2 最小/中位/最大 |
+| --- | --- | --- |
+| 首份释放 | 38.66 / 95.68 / 131.94 | 66.25 / 182.95 / 243.17 |
+| 三份释放均已收到 | 67.25 / 109.09 / 157.89 | 77.31 / 203.61 / 244.15 |
+
+计时包含串口命令、BLE 调度及 BlueZ/观测进程开销。远端单调时钟按最小往返校准，半 RTT 约 1.24 ms；
+该数值不覆盖后续时钟漂移和调度误差，不能视为硬实时保证，也不是 USB 输入端到端延迟。
+
+### 回归命令与证据
+
+```sh
+python3 scripts/check-ble-capacity.py --build-dir target/xtensa-esp32s3-espidf/release/build/esp-idf-sys-0db32ea7f054f2db/out/build
+
+/usr/bin/python3 scripts/ble-two-host-check.py \
+  --remote 100.115.182.59 \
+  --ssh-command 'ssh -o BatchMode=yes -o HostKeyAlias=192.168.31.209 -o ConnectTimeout=8' \
+  --address 68:EE:8F:59:7F:36 --cycles 20 \
+  --log /tmp/opencode/bt-switch-two-host-routing-final.json
+
+/usr/bin/python3 scripts/ble-reboot-check.py \
+  --remote 100.115.182.59 \
+  --ssh-command 'ssh -o BatchMode=yes -o HostKeyAlias=192.168.31.209 -o ConnectTimeout=8' \
+  --address 68:EE:8F:59:7F:36 --max-recovery-seconds 10 \
+  --log /tmp/opencode/bt-switch-two-host-reboot.json
+```
+
+`ble-forget-check.py` 会真正删除槽位 2，运行前须确认允许清理其配对；结束后需在机器 2 重新配对。
+`hci-security-watch.py` 需要 root/CAP_NET_RAW，但仅输出目标设备的安全控制元数据，不输出密钥、原始包或 HID 报告。
+测试脚本和 JSON/串口日志是回归证据，不是 Flash 备份。
+
+关键证据（位于临时目录，未提交）：
+
+- `/tmp/opencode/bt-switch-two-host-routing-final.json` 及 `-summary.json`
+- `/tmp/opencode/bt-switch-forget-red.json`、`bt-switch-forget-final.json`
+- `/tmp/opencode/bt-switch-two-host-reboot-red.json`、`bt-switch-two-host-reboot-final-summary.json`
+- `/tmp/opencode/bt-switch-hci-host-1.jsonl`、`bt-switch-hci-host-2.jsonl`
+
+## 2026-11-11：多连接实现接入后的单机回归（历史）
 
 固件现已改为 `Vec<Connection> + Router`，底层配置为 3 条连接、4 个控制器活动、48 条 CCCD 存储。
 旧版的单连接状态机、800 ms 计时就绪、切槽主动断连及向全部订阅者广播的发送方式均已替换。
