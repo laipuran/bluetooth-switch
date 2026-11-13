@@ -15,7 +15,7 @@ usb.rs / InterfaceCtx
   ▼
 mpsc channel（有界，128）
   ▼
-main.rs
+app/input.rs
   │  Translator::update（按 interface 合并键盘/按钮/多媒体）
   ▼
 Translator::flush
@@ -26,6 +26,17 @@ ble/mod.rs → core/router → ble/transport.rs
   ▼
 当前选中的 BLE 主机
 ```
+
+### 应用协调与诊断模块
+
+`main.rs` 只初始化日志并进入 `app::run()`。`app/mod.rs` 维护处理顺序和调度；
+`app/controls.rs` 将按键与串口归一为相同操作；`app/input.rs` 隐藏输入合并、
+溢出释放、切换保护及发送确认。结构整理阶段仍保留固定 4 ms 等待，不混入调度优化。
+
+通用 USB 观测独立于 HID：`usb/discovery.rs` 处理客户端与扫描，
+`usb/discovery/describe.rs` 只读缓存描述符，`usb/discovery/port.rs` 只读端口与 PHY。
+`usb-gpio-check` 二进制复用观测端，不启动 BLE/HID；GPIO 原始输入值不能替代 USB PHY 线路状态。
+BLE 的 `link_params.rs` 只读实际连接参数，不提交更新请求；状态日志不把请求值当作协商值。
 
 ### 为什么按 report ID 分别保存状态
 

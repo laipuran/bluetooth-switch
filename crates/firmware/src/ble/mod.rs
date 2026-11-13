@@ -6,6 +6,7 @@ mod attributes;
 mod bond;
 mod connection;
 mod events;
+mod link_params;
 mod management;
 mod profile;
 mod transport;

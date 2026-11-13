@@ -10,6 +10,7 @@ pub mod report;
 pub mod router;
 pub mod session;
 pub mod slots;
+pub mod usb_descriptor;
 
 /// HID interfaces that can be merged into one Bluetooth HID device.
 ///

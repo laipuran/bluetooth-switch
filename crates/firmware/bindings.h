@@ -10,4 +10,6 @@
 #if defined(ESP_IDF_COMP_ESPRESSIF__USB_HOST_HID_ENABLED)
 #include "usb/usb_host.h"
 #include "usb/hid_host.h"
+#include "soc/usb_dwc_struct.h"
+#include "soc/usb_wrap_struct.h"
 #endif

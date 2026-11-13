@@ -67,6 +67,20 @@ impl SlotTable {
         index < self.count && self.slots[index].used
     }
 
+    /// 查找当前槽位之外的下一个已配对槽位；离线不等于空槽。
+    /// 无其他已配对槽位时不切换，也不隐式打开配对窗口。
+    pub fn cycle_used(&self, backwards: bool) -> Option<usize> {
+        (1..self.count)
+            .map(|offset| {
+                if backwards {
+                    (self.selected + self.count - offset) % self.count
+                } else {
+                    (self.selected + offset) % self.count
+                }
+            })
+            .find(|index| self.is_used(*index))
+    }
+
     /// 请求目标槽位；调用方可立即提交，提交过程不要求断开连接。
     pub fn select(&mut self, index: usize) -> bool {
         if index >= self.count || index == self.desired {
@@ -217,6 +231,37 @@ mod tests {
 
     fn addr(last: u8) -> [u8; 6] {
         [1, 2, 3, 4, 5, last]
+    }
+
+    #[test]
+    fn cycling_skips_empty_slots_in_both_directions() {
+        let mut table = SlotTable::new(4);
+        table.bind(0, addr(1), 0).unwrap();
+        table.bind(2, addr(2), 0).unwrap();
+        assert_eq!(table.cycle_used(false), Some(2));
+        assert_eq!(table.cycle_used(true), Some(2));
+        table.select(2);
+        table.commit();
+        assert_eq!(table.cycle_used(false), Some(0));
+        assert_eq!(table.cycle_used(true), Some(0));
+        // 手动选择空槽后，仍可回到已配对槽位。
+        table.select(1);
+        table.commit();
+        assert_eq!(table.cycle_used(false), Some(2));
+        assert_eq!(table.cycle_used(true), Some(0));
+    }
+
+    #[test]
+    fn cycling_without_another_paired_slot_is_a_noop() {
+        for count in [1, 3] {
+            let mut table = SlotTable::new(count);
+            assert_eq!(table.cycle_used(false), None);
+            assert_eq!(table.cycle_used(true), None);
+            table.bind(0, addr(1), 0).unwrap();
+            assert_eq!(table.cycle_used(false), None);
+            assert_eq!(table.cycle_used(true), None);
+            assert_eq!(table.selected(), 0);
+        }
     }
 
     #[test]

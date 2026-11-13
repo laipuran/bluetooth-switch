@@ -33,6 +33,8 @@ use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::sys;
 use esp_idf_svc::sys::usb_hid as usb;
 
+mod discovery;
+
 /// Decoded input from one HID interface, or a detach notification.
 pub enum UsbEvent {
     Input { source: u8, state: Decoded },
@@ -65,6 +67,15 @@ pub struct UsbInput {
 }
 
 impl UsbInput {
+    /// 无 HID 输入接口时才允许诊断重启，避免打断正在使用的键鼠。
+    pub fn rescan(&self) {
+        if self.attached() {
+            log::warn!("USB restart skipped: active HID interfaces");
+        } else {
+            discovery::restart();
+        }
+    }
+
     /// Returns true once if input events had to be dropped.
     pub fn take_overflow(&self) -> bool {
         OVERFLOW.swap(false, Ordering::Relaxed)
@@ -76,6 +87,7 @@ impl UsbInput {
     }
 
     pub fn status(&self) {
+        discovery::status();
         log::info!(
             "USB HID: {} interfaces, {} reports decoded",
             ATTACHED.load(Ordering::Relaxed),
@@ -131,6 +143,9 @@ pub fn start() -> Result<UsbInput> {
     }
 
     log::info!("USB host HID driver installed");
+    if let Err(error) = discovery::start() {
+        log::warn!("USB discovery observer unavailable: {error}");
+    }
     Ok(UsbInput { events: rx })
 }
 

@@ -18,12 +18,13 @@
 
 默认配置最多 3 条连接，仅选中的槽位接收输入。切槽不再主动断连；旧、新目标发送全释放，失败会重试。离线目标暂停输入，不回退到其他主机；白名单覆盖全部已配对槽位。
 
-**上板状态（2026-11-12）**：按用户授权整片擦除、仅重刷 Rust 后，已验证两台 Linux 同时加密在线、双端订阅、40 次切换的旧新目标释放与通知隔离、离线第三槽位、只忘记单槽位，以及连续 10 次复位后恢复双机加密。
-本轮修复了广播期间删除 bond 失败及底层 SMP 过程池容量不足的问题。测试只使用全零报告；**USB→BLE 完整输入链路、第三台在线、其他系统及 RPA 仍未验证**。详见 [上板测试记录](docs/BOARD_TEST.md)。
+**上板状态（2026-11-13）**：已验证两台 Linux 同时加密在线、双端订阅、切换释放与通知隔离、只忘记单槽位及复位恢复；现已通过可用 Hub 接入真实接收器，完成 G2M Pro 直插与 USB→BLE 鼠标移动的频率对照，并加入 GPIO4 单键原型。
+关闭逐报告日志、实测本电脑 BLE 间隔 7.5 ms、两台在线时，25 秒移动帧平均约 114.6 Hz，P95 约 15.98 ms；不代表稳定 125 Hz 或端到端延迟。第三台在线、其他系统及 RPA 仍未验证。详见 [上板测试记录](docs/BOARD_TEST.md)。
 
 ## 硬件
 
 默认使用通用板配置：**不驱动任何未确认的 LED、按键、USB 路由或供电 GPIO**，管理操作使用串口。
+外接单键原型使用 `cargo build --release --bin bt-switch --features prototype-button`：按键 S 接 GPIO4、负极接 GND、确认正极后接 3V3（禁止接 5V）。GPIO4 为上拉输入，低电平按下，消抖 15 ms；短按松开切换下一个已配对槽位（跳过空槽，保留已配对但离线的槽位；无其他已配对槽位时不切换），长按 3 秒打开配对，不清除配对。串口下一/上一槽位命令同样跳过空槽，数字命令仍可手动选择空槽。该配置与 `official-otg` 互斥，不操作其他板级 GPIO。
 原生 USB 使用 GPIO19=D−、GPIO20=D+；使用 USB Host 前须确认对应接口接线及 5 V VBUS，不能根据双 Type-C 外观判断。
 本轮实读 Flash 为 16 MB，配置和烧录参数已据此设置；更换硬件须重新确认容量。
 
@@ -58,13 +59,17 @@ crates/core/        与 ESP-IDF 无关的纯逻辑，可在电脑上 cargo test
   session.rs        逐连接协议、订阅、挂起、LED 与读取快照
   slots.rs          槽位表、NVS 二进制格式、配对窗口
   control.rs        按键消抖、单击/长按识别
+  usb_descriptor.rs 通用 USB 描述符的只读解析
 crates/firmware/    ESP-IDF 固件
   usb.rs            USB Host + HID class driver（FFI）
+  usb/discovery/    通用设备枚举、缓存描述符和只读 PHY/端口快照
   ble/              BLE 应用层与 NimBLE 适配层，职责划分见 docs/DESIGN.md
-  board/            默认通用安全配置；官方 OTG 引脚配置需显式启用
+  board/            通用安全配置、显式启用的官方板或 GPIO4 单键配置
+  app/              主循环协调、控制指令、输入转发管线
   storage.rs        NVS 槽位持久化
   console.rs        串口命令
-  main.rs           主循环
+  main.rs           初始化日志并进入应用
+  usb_probe.rs      独立 USB/GPIO 诊断程序，不启动 BLE/HID
 ```
 
 ## 构建
@@ -124,7 +129,7 @@ cargo test -p bt-switch-core
 cargo clippy -p bt-switch-core --all-targets -- -D warnings
 ```
 
-`bt-switch-core` 包含 33 个测试：HID 描述符边界/模糊输入、report 解码、多接口合并、切换保护、多连接路由、逐连接属性、槽位持久化、按键手势。
+`bt-switch-core` 包含 38 个测试：HID 描述符边界/模糊输入、report 解码、多接口合并、切换保护、多连接路由、逐连接属性、槽位持久化、跳过空槽、按键手势和通用 USB 描述符。
 
 ## 使用
 
@@ -136,13 +141,14 @@ cargo clippy -p bt-switch-core --all-targets -- -D warnings
 
 之后：
 
-* `n` / OK：下一个槽位。
-* `b` / UP：上一个槽位。
+* `n` / OK：下一个已配对槽位，跳过空槽；只有一个已配对槽位时不切换。
+* `b` / UP：上一个已配对槽位，跳过空槽；已配对但离线的槽位仍可选择。
 * `1`..`3`：直接选择槽位。
 * `t`：向当前主机发送全零 HID 探针，不产生按键、鼠标移动或滚轮。
 * `p` / DW：为当前空槽位或下一个空槽位打开配对窗口，不改变输入目标。
 * `X` / MENU 长按 5 s：仅断开并忘记当前槽位，其他连接保留；主机侧也要移除设备。
 * `s` / MENU 单击：打印槽位、连接、USB 状态。
+* `u`：无活动 HID 接口时重启逻辑 USB 根端口；不操作板级供电 GPIO。
 * `h`：帮助。
 
 切换时如果按着 Ctrl/Alt/鼠标键，固件会等到所有键都松开才向新主机转发输入，避免“粘键”。
@@ -164,15 +170,16 @@ cargo clippy -p bt-switch-core --all-targets -- -D warnings
 
 ## 已知限制
 
-* 已完成两台 Linux 的 BLE 实机回归；第三台、RPA、其他系统与真实 USB 输入仍待验证，不能沿用 C 固件的验证结论。
+* 已完成两台 Linux 的 BLE 实机回归及真实 USB 鼠标移动观测；第三台、RPA、其他系统和完整键盘功能矩阵仍待验证，不能沿用 C 固件的验证结论。
 * 全零释放的主机侧观测延迟受串口、连接调度与 BlueZ 影响；本轮完整三报告释放约 67–244 ms，不是 USB 输入延迟或硬实时保证。
 * Boot 模式仅键盘与 3 字节鼠标，没有 Consumer/滚轮；Boot 与逐连接写属性目前只有核心测试，BlueZ 默认只读导出 HID 属性使本机 D-Bus 写属性测试受阻，未为此修改系统蓝牙配置。
 * 只处理标准 USB HID 键鼠/Consumer；不转发厂商自定义 report、RGB、震动等。
 * HID 输出 report（键盘 LED）已经建立 characteristic，但尚未回传给 USB 接收器。
 * 绝对坐标设备（数位板、触摸屏）会被忽略，避免被误当成鼠标相对位移。
 * 蓝牙键盘 report 使用 boot 格式，最多 6 键同时按下；超过 6 键发送 HID ErrorRollOver。
-* USB Hub 未启用（ESP-IDF `CONFIG_USB_HOST_HUBS_SUPPORTED` 默认关闭）。
-* 没有实现旋钮/编码器；`control::Button` 和 `main.rs` 的按键映射很容易替换成编码器或 OLED 菜单。
+* 已启用 USB Hub 和多级 Hub；并非所有 Type-C 扩展坞都已兼容。已枚举 `05e3:0610` Hub 及接收器；此前多功能扩展坞在板端无接入信号，根因未确认。
+* BLE 连接间隔由协商决定。`s` 输出实际间隔；固件不自动请求 7.5 ms，也不保证重连后维持该值。NimBLE 的逐报告 INFO 日志已关闭。
+* 没有实现旋钮/编码器；物理手势到操作的映射位于 `app/controls.rs`。
 
 ## 与 C 版本的关系
 

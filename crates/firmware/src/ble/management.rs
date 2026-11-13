@@ -27,14 +27,15 @@ impl BleManager {
     }
 
     pub fn next_slot(&mut self, now_ms: u64) -> bool {
-        self.select((self.slots.selected() + 1) % self.slots.count(), now_ms)
+        self.slots
+            .cycle_used(false)
+            .is_some_and(|slot| self.select(slot, now_ms))
     }
 
     pub fn prev_slot(&mut self, now_ms: u64) -> bool {
-        self.select(
-            (self.slots.selected() + self.slots.count() - 1) % self.slots.count(),
-            now_ms,
-        )
+        self.slots
+            .cycle_used(true)
+            .is_some_and(|slot| self.select(slot, now_ms))
     }
 
     pub fn pair(&mut self, now_ms: u64) {
@@ -147,6 +148,7 @@ impl BleManager {
                 peer.suspended,
                 peer.releases
             );
+            super::link_params::status(peer.connection);
         }
     }
 

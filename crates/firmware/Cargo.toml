@@ -3,16 +3,24 @@ name = "bt-switch-firmware"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "bt-switch"
 
 [[bin]]
 name = "bt-switch"
 path = "src/main.rs"
 harness = false
 
+[[bin]]
+name = "usb-gpio-check"
+path = "src/usb_probe.rs"
+harness = false
+
 [features]
 default = []
 # 仅确认使用乐鑫官方 USB-OTG 板时启用其供电、路由与按键引脚。
 official-otg = []
+# 用户已确认外接三针按键：S=GPIO4、负极=GND、正极=3V3。
+prototype-button = []
 # Reuse the PlatformIO installation of ESP-IDF instead of the native builder.
 # Requires `pio` in PATH and ESP_IDF_TOOLS_INSTALL_DIR=fromenv.
 pio = ["esp-idf-svc/pio"]
