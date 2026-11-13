@@ -31,7 +31,21 @@ ble/mod.rs → core/router → ble/transport.rs
 
 `main.rs` 只初始化日志并进入 `app::run()`。`app/mod.rs` 维护处理顺序和调度；
 `app/controls.rs` 将按键与串口归一为相同操作；`app/input.rs` 隐藏输入合并、
-溢出释放、切换保护及发送确认。结构整理阶段仍保留固定 4 ms 等待，不混入调度优化。
+溢出释放、切换保护及发送确认。结构基线提交 `605a9cb` 仍保留固定 4 ms 等待。
+
+随后的调度优化由 `app/inbox.rs` 实现：等待首条 USB 输入，空闲等待最多 1 ms，
+收到输入立即处理；每轮最多消费 16 条事件，然后继续 BLE 管理、串口和按键轮询。
+没有输入时也会运行释放重试，不使用忙轮询；批次上限不等于鼠标回报率或 BLE 连接间隔。
+溢出后的复位/释放/清队列策略与原版一致。输入通道永久断开时先释放，再返回显式错误。
+
+`inbox.rs` 不依赖硬件，可直接测试实际使用的队列逻辑：
+
+```sh
+rustc --edition=2024 --test crates/firmware/src/app/inbox.rs -o /tmp/opencode/bt-switch-inbox-tests
+/tmp/opencode/bt-switch-inbox-tests
+```
+
+这四项测试覆盖 FIFO、持续生产时批次让步、空闲管理机会和断开处理，不能代替上板测速。
 
 通用 USB 观测独立于 HID：`usb/discovery.rs` 处理客户端与扫描，
 `usb/discovery/describe.rs` 只读缓存描述符，`usb/discovery/port.rs` 只读端口与 PHY。

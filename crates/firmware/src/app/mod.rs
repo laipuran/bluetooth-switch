@@ -2,13 +2,13 @@
 //! 此模块不负责板级引脚、USB 描述符或 BLE 属性实现。
 
 mod controls;
+mod inbox;
 mod input;
 
 use std::sync::mpsc;
 use std::time::Instant;
 
 use anyhow::Result;
-use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
@@ -43,12 +43,9 @@ pub fn run() -> Result<()> {
             controls::apply(&mut ble, &mut input, &usb, command, now);
         }
 
-        input.poll(&usb, &mut ble);
+        input.poll(&usb, &mut ble)?;
 
         let green = ble.is_ready() || (ble.is_advertising() && (now / 500) % 2 == 0);
         board.set_leds(green, usb.attached());
-
-        // 结构整理阶段保留原有 4 ms 调度，性能修改另行提交。
-        FreeRtos::delay_ms(4);
     }
 }
